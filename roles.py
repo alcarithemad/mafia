@@ -1,4 +1,3 @@
-import math
 import random
 
 from collections import defaultdict
@@ -95,7 +94,7 @@ def determine_roles(num_players):
 		ret.append(Roles['Godfather'])
 		mafia -= 1
 	if random.random() >= 0.75 and innocents > 0:
-		if random.random >= 0.98:
+		if random.random() >= 0.98:
 			ret.append(Roles['InsaneCop'])
 		else:
 			ret.append(Roles['Cop'])
