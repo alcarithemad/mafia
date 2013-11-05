@@ -1,5 +1,6 @@
 import math
 import thread
+import time
 
 from collections import defaultdict
 
@@ -7,7 +8,7 @@ from roles import Roles, determine_roles
 
 class MafiaGame(object):
 
-	def __init__(self, irc, prefix):
+	def __init__(self, irc, prefix, lock=None, round=0, pending=None):
 		self.irc = irc
 		self.prefix = prefix
 		self.channels = {
@@ -17,10 +18,18 @@ class MafiaGame(object):
 		for channel in self.channels.values():
 			print 'joining', channel
 			self.irc.join(channel)
-		self.pending = set()
+			self.irc.mode(channel, '-m')
+		self.irc.mode(self.channels['mafia'], '+si')
+		# FIXME: self.irc.names is return None
+		# for nick in self.irc.names([self.channels['mafia']]):
+		# 	self.irc.kick(self.channels['mafia'], nick, 'clearing channel for game')
+		self.pending = pending or set()
 		self.players = {}
 		self.time = 'day'
 		self.date = 0
+		self.round = 0
+		self.phase_started = 0
+		self.phase_lock = lock or thread.allocate_lock()
 		self.vigilante_targets = {}
 		self.investigate_targets = {}
 
@@ -68,6 +77,7 @@ class MafiaGame(object):
 			self.irc.privmsg(player, "Your role is: {}.".format(role.ROLE))
 			self.irc.privmsg(player, role.DESC)
 		self.init_votes()
+		thread.start_new_thread(self.phase_countdown, ())
 		self.start_day()
 
 	def check_victory(self):
@@ -82,12 +92,43 @@ class MafiaGame(object):
 
 		return True
 
+	def phase_countdown(self):
+		date_time = self.date, self.time, self.round
+		self.phase_started = time.time()
+		print 'asdf'
+		for x in xrange(3):
+			if (self.date, self.time, self.round) == date_time:
+				time_left = 'There are {} minutes left in the {}.'.format(5-x, self.time)
+				self.irc.privmsg(self.channels['town'], time_left)
+				self.irc.privmsg(self.channels['mafia'], time_left)
+				time.sleep(60)
+		if (self.date, self.time, self.round) == date_time:	
+			time_left = 'There is 1 minute left in the {}.'.format(self.time)
+			self.irc.privmsg(self.channels['town'], time_left)
+			self.irc.privmsg(self.channels['mafia'], time_left)
+			time.sleep(60)
+		if (self.date, self.time, self.round) == date_time:
+			locked = self.phase_lock.acquire(0)
+			if locked:
+				msg = 'Time ran out with no majority vote.'
+				self.irc.privmsg(self.channels['town'], msg)
+				self.irc.privmsg(self.channels['mafia'], msg)
+				self.next_phase()
+				self.phase_lock.release()
+
+
 	def next_phase(self):
 		over = self.check_victory()
 		if over:
-			self.__init__(self.irc, self.prefix)
+			self.__init__(self.irc,
+				self.prefix,
+				lock=self.phase_lock,
+				round=self.round+1,
+				pending=self.pending,
+			)
 			return
 		self.init_votes()
+		thread.start_new_thread(self.phase_countdown, ())
 		if self.time == 'day':
 			self.start_night()
 		elif self.time == 'night':
@@ -100,7 +141,8 @@ class MafiaGame(object):
 		self.night_actions = sum(p.NIGHT_ACTIONS for p in self.players.values())
 		for player in self.players.values():
 			player.skip = False
-		# TODO: -m #town, +m #mafia
+		self.irc.mode(self.channels['town'], '+m')
+		self.irc.mode(self.channels['mafia'], '-m')
 
 	def start_day(self):
 		self.time = 'day'
@@ -117,6 +159,9 @@ class MafiaGame(object):
 				result = 'innocent' if result else 'guilty'
 				self.irc.privmsg(cop, 'Your investigation finds {} to be {}.'.format(target, result))
 		self.vigilante_targets = {}
+		self.investigate_targets = {}
+		self.irc.mode(self.channels['town'], '-m')
+		self.irc.mode(self.channels['mafia'], '+m')
 
 	def vote(self, kind, player, dest, target):
 		if player.active[kind]:
@@ -132,7 +177,10 @@ class MafiaGame(object):
 		print majority, self.votes[kind]
 		for player, votes in self.votes[kind].items():
 			if votes >= majority:
-				self.remove_player(player)
+				locked = self.phase_lock.acquire(0)
+				if locked:
+					self.remove_player(player)
+					self.phase_lock.release()
 				self.next_phase()
 				break
 
@@ -160,9 +208,13 @@ class MafiaGame(object):
 	def investigate(self, player, dest, target):
 		self.investigate_targets[player.name] = target
 
-	def status(self, player, dest, target):
-		self.irc.privmsg(dest, "It's currently {0} {1}. There are {2} living players.".format(self.time, self.date, len(self.players)))
-		# TODO: list active players, time remaining, etc.
+	def status(self, player, dest, *a):
+		status = "It's currently {0} {1}. There are {2} living players.".format(
+				self.time, self.date, len(self.players), 
+			) 
+		if self.phase_started:
+			status += " There are {0} seconds left in the {1}.".format(int(300-(time.time()-self.phase_started)), self.time)
+		self.irc.privmsg(dest, status)
 
 	def skip(self, player, dest):
 		self.irc.privmsg(player.name, 'You will skip your night actions.')
@@ -179,28 +231,30 @@ class MafiaGame(object):
 		cmd = sp[0]
 		args = sp[1:]
 		print 'handling', player or nick, cmd, 'args', args
-		if not player:
-			if cmd == 'join':
-				self.pending.add(nick)
-				self.irc.privmsg(nick, "You will be in the next round.")
-			elif cmd == 'help':
-				self.irc.privmsg(nick, 'help message not implemented >_>')
-			elif cmd == 'start':
-				if self.in_progress:
-					self.irc.privmsg(nick, "There's already a game in progress.")
-				if len(self.pending) < 1:
-					self.irc.privmsg(dest, "Not enough players to !start.")
-				else:
-					self.start_game()
-			return
+		if cmd == 'join':
+			self.pending.add(nick)
+			self.irc.privmsg(dest, "{} will be in the next round.".format(nick))
+		elif cmd == 'help':
+			self.irc.privmsg(nick, 'help message not implemented >_>')
+		elif cmd == 'start':
+			if self.in_progress:
+				self.irc.privmsg(nick, "There's already a game in progress.")
+			if len(self.pending) < 1:
+				self.irc.privmsg(dest, "Not enough players to !start.")
+			else:
+				self.start_game()
 
-		if self.time == 'day':
-			cmd = player.day.get(cmd)
-		elif self.time == 'night':
-			cmd =  player.night.get(cmd)
+		if player:
+			if self.time == 'day':
+				cmd = player.day.get(cmd)
+			elif self.time == 'night':
+				cmd =  player.night.get(cmd)
 
-		if cmd:
-			cmd(player, dest, *args)
+			if cmd:
+				try:
+					cmd(player, dest, *args)
+				except:
+					self.irc.privmsg(dest, 'Not enough parameters given!')
 
 if __name__ == '__main__':
 	print Roles.keys()

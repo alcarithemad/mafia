@@ -34,8 +34,6 @@ class MafiaBot(irc.bot.SingleServerIRCBot):
 		if cmd.startswith('!'):
 			if cmd == '!help':
 				self.game.help(nick)
-			elif cmd == '!status':
-				self.game.status(dest)
 			else:
 				self.game.handle(e, dest, a)
 

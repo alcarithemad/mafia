@@ -28,9 +28,12 @@ class Player(object):
 			'lynch':game.lynch,
 			'status':game.status,
 		}
-		self.night = {
-			'skip':game.skip,
-		}
+		if self.NIGHT_ACTIONS:
+			self.night = {
+				'skip':game.skip,
+			}
+		else:
+			self.night = {}
 		self.skip = False
 
 class Citizen(Player):
@@ -77,6 +80,7 @@ class Mafia(Player):
 	def __init__(self, name, game):
 		super(Mafia, self).__init__(name, game)
 		self.night['kill'] = game.kill
+		game.irc.invite(name, game.channels['mafia'])
 
 class Godfather(Mafia):
 	ROLE = 'godfather'
