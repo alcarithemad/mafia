@@ -24,7 +24,7 @@ class MafiaBot(irc.bot.SingleServerIRCBot):
 
 	def do_command(self, e, a):
 		cmd = a[0]
-		print 'got cmd', e, cmd
+		print 'got msg', e, cmd
 		nick = e.source.nick
 		if e.target != self.name:
 			dest = e.target

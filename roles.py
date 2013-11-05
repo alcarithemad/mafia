@@ -28,9 +28,10 @@ class Player(object):
 		self.day = {
 			'lynch':game.lynch,
 			'status':game.status,
+		}
+		self.night = {
 			'skip':game.skip,
 		}
-		self.night = {}
 		self.skip = False
 
 class Citizen(Player):
@@ -41,6 +42,7 @@ class Cop(Citizen):
 	ROLE = 'cop'
 	DESC = 'The cop can !investigate one player each night, determining if they are innocent (a citizen) or guilty (a mafiosi).'
 	NIGHT_ACTIONS = 1
+	INSANE = False
 
 	def __init__(self, name, game):
 		super(Cop, self).__init__(name, game)
@@ -50,11 +52,11 @@ class InsaneCop(Citizen):
 	ROLE = 'cop'
 	DESC = 'The cop can !investigate one player each night, determining if they are innocent (a citizen) or guilty (a mafiosi).'
 	NIGHT_ACTIONS = 1
+	INSANE = True
 
 	def __init__(self, name, game):
 		super(InsaneCop, self).__init__(name, game)
 		self.TROLE = 'insane cop'
-		self.night['investigate'] = game.insane_investigate
 
 class Vigilante(Citizen):
 	ROLE = 'vigilante'
@@ -68,7 +70,7 @@ class Vigilante(Citizen):
 class Mafia(Player):
 	ROLE = 'mafia'
 	TEAM = 'mafia'
-	DESC = 'During the day, the mafia pretends to be honest citizens, but at night they vote to !kill one player.'
+	DESC = 'During the day, the mafia pretend to be honest citizens, but at night they vote to !kill one player.'
 	CHANNELS = ['town', 'mafia']
 	INNOCENT = False
 	NIGHT_ACTIONS = 1

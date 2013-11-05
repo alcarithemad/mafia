@@ -1,4 +1,5 @@
 import math
+import thread
 
 from collections import defaultdict
 
@@ -21,7 +22,7 @@ class MafiaGame(object):
 		self.time = 'day'
 		self.date = 0
 		self.vigilante_targets = {}
-		self.init_votes()
+		self.investigate_targets = {}
 
 	@property
 	def in_progress(self):
@@ -42,7 +43,8 @@ class MafiaGame(object):
 		}
 		self.majorities = {}
 		for kind, num in self.voters.items():
-			self.majorities[kind] = int(math.ceil(num/2))
+			print kind, num, int(math.ceil(num/2.0)), len(self.players)
+			self.majorities[kind] = int(math.ceil(num/2.0+0.5))
 
 	def add_player(self, name, role):
 		self.players[name] = role(name, self)
@@ -65,17 +67,19 @@ class MafiaGame(object):
 			self.players[player] = role(player, self)
 			self.irc.privmsg(player, "Your role is: {}.".format(role.ROLE))
 			self.irc.privmsg(player, role.DESC)
+		self.init_votes()
 		self.start_day()
 
 	def check_victory(self):
-		if not any(p for p in self.players if p.TEAM == 'mafia'):
-			self.irc.privmsg(self.channels['town'], 'All the mafia members are dead!')
-		elif sum(p for p in self.players if p.TEAM == 'mafia') > sum(p for p in self.players if p.TEAM == 'town'):
-			self.irc.privmsg(self.channels['town'], 'The mafia outnumbers the honest citizens!')
+		if not any(p for p in self.players.values() if p.TEAM == 'mafia'):
+			self.irc.privmsg(self.channels['town'], 'All the mafia members are dead! The citizens win.')
+		elif len([p for p in self.players.values() if p.TEAM == 'mafia']) > len([p for p in self.players.values() if p.TEAM == 'town']):
+			self.irc.privmsg(self.channels['town'], 'The mafia outnumbers the honest citizens! The mafia wins.')
+		elif len(self.players) == 2:
+			self.irc.privmsg(self.channels['town'], 'Only a single citizen remains. The mafia wins.')
 		else:
 			return False
 
-		self.irc.privmsg(self.channels['town'], 'The citizens win!')
 		return True
 
 	def next_phase(self):
@@ -105,6 +109,13 @@ class MafiaGame(object):
 		for vigilante, target in self.vigilante_targets:
 			if vigilante in self.players:
 				self.remove_player(target)
+		for cop, target in self.investigate_targets:
+			if cop in self.players:
+				result = self.players[target].INNOCENT
+				if self.players[cop].INSANE:
+					result = not result
+				result = 'innocent' if result else 'guilty'
+				self.irc.privmsg(cop, 'Your investigation finds {} to be {}.'.format(target, result))
 		self.vigilante_targets = {}
 
 	def vote(self, kind, player, dest, target):
@@ -117,7 +128,7 @@ class MafiaGame(object):
 		else:
 			player.active[kind] = None
 			self.irc.privmsg(dest, '{} cleared their vote.'.format(player.name))
-		majority = math.ceil(self.majorities[kind]/2)
+		majority = math.ceil(self.majorities[kind])
 		print majority, self.votes[kind]
 		for player, votes in self.votes[kind].items():
 			if votes >= majority:
@@ -128,7 +139,7 @@ class MafiaGame(object):
 	def kill(self, player, dest, target):
 		if self.time == 'night':
 			self.vote('kill', player, dest, target)
-			self.irc.privmsg(self.channels['town'], '{} has voted to !kill {}'.format(player.name, target))
+			self.irc.privmsg(self.channels['mafia'], '{} has voted to !kill {}'.format(player.name, target))
 		else:
 			self.irc.privmsg(player.name, "Can't vote to kill now.")
 			pass
@@ -144,25 +155,22 @@ class MafiaGame(object):
 	def vigilante_kill(self, player, dest, target):
 		# TODO: confirm with player
 		self.irc.privmsg(player.name, 'You will kill {} by daybreak, or die trying.'.format(target))
-		self.vigilante_target = target
+		self.vigilante_targets[player.name] = target
 
 	def investigate(self, player, dest, target):
-		# TODO: implement me
-		pass
-
-	def insane_investigate(self, player, dest, target):
-		# TODO: implement me
-		pass
+		self.investigate_targets[player.name] = target
 
 	def status(self, player, dest, target):
 		self.irc.privmsg(dest, "It's currently {0} {1}. There are {2} living players.".format(self.time, self.date, len(self.players)))
 		# TODO: list active players, time remaining, etc.
 
-	def skip(self, player, dest, target):
+	def skip(self, player, dest):
 		self.irc.privmsg(player.name, 'You will skip your night actions.')
 		if not player.skip:
 			player.skip = True
 			self.night_actions -= 1
+		if self.night_actions == 0:
+			self.next_phase()
 
 	def handle(self, info, dest, a):
 		nick = info.source.nick
@@ -170,7 +178,7 @@ class MafiaGame(object):
 		sp = a[0].lstrip('!').split()
 		cmd = sp[0]
 		args = sp[1:]
-		print 'handling', player, cmd, 'args', args
+		print 'handling', player or nick, cmd, 'args', args
 		if not player:
 			if cmd == 'join':
 				self.pending.add(nick)
